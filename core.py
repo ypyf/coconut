@@ -2,7 +2,7 @@
 
 import copy
 from ctypes import *
-from defines import *
+from types import *
 from ctypes import wintypes
 import sys
 
