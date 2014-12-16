@@ -1,10 +1,10 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import copy
-from ctypes import *
-from types import *
-from ctypes import wintypes
 import sys
+from windows import *
+from ctypes import *
+from ctypes import wintypes
 
 kernel32 = windll.kernel32
 
@@ -52,7 +52,7 @@ class Debugger():
             return self.read_process_memory(address, length * sizeof(c_wchar))
         else:
             return self.read_process_memory(address, length)
-    
+
     #def report_error(self, msg=None):
     #    error = GetLastError()
     #    if msg != None:
@@ -77,7 +77,7 @@ class Debugger():
         func = kernel32.GetProcAddress(handle, name)
         kernel32.CloseHandle(handle)
         return func
-    
+
     def set_breakpoint(self, address):
         if not self.breakpoints.has_key(address):
             try:
@@ -126,22 +126,22 @@ class Debugger():
             self.pid = process_information.dwProcessId
             self.h_process = self.open_process(process_information.dwProcessId)
             self.debugger_active = True
-        else:    
+        else:
             raise WinError()
-            
+
     def open_process(self, pid):
         # NOTE: 32bit process only
         hProcess = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
         return hProcess
-    
+
     def open_thread(self, thread_id):
         h_thread = kernel32.OpenThread(THREAD_ALL_ACCESS, None, thread_id)
         if h_thread is not None:
             return h_thread
         else:
             print "[*] Could not obtain a valid thread handle."
-            return False  
-     
+            return False
+
     def enumerate_modules(self, pid):
         module_entry = MODULEENTRY32()
         module_entry.dwSize = sizeof(module_entry)
@@ -169,21 +169,21 @@ class Debugger():
         thread_entry = THREADENTRY32()
         thread_list = []
         snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, self.pid)
-        
+
         if snapshot is not None:
             thread_entry.dwSize = sizeof(thread_entry)
             success = kernel32.Thread32First(snapshot, byref(thread_entry))
-            
+
             while success:
                 if thread_entry.th32OwnerProcessID == self.pid:
                     thread_list.append(thread_entry.th32ThreadID)
                 success = kernel32.Thread32Next(snapshot, byref(thread_entry))
-                
+
             kernel32.CloseHandle(snapshot)
             return thread_list
         else:
             return False
-    
+
     def get_thread_context(self, h_thread):
         context = CONTEXT()
         context.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS
@@ -192,7 +192,7 @@ class Debugger():
             return context
         else:
             return False
-                         
+
     def attach(self, pid):
         self.h_process = self.open_process(pid)
         # We attempt to attach to the process
@@ -200,17 +200,17 @@ class Debugger():
         if kernel32.DebugActiveProcess(pid):
             self.debugger_active = True
             self.pid = int(pid)
-            self.start_debug()                      
+            self.start_debug()
         else:
             print "[*] Unable to attach to the process."
-            #print "[*] Error occurred: 0x%08x." % kernel32.GetLastError() 
+            #print "[*] Error occurred: 0x%08x." % kernel32.GetLastError()
             raise WinError()
-            
+
     def start_debug(self):
         """ Debugger main loop """
         while self.debugger_active:
             self.get_debug_event()
-    
+
     def get_debug_event(self):
         debug_event = DEBUG_EVENT()
         continue_status = DBG_CONTINUE
@@ -235,7 +235,7 @@ class Debugger():
                     self.Debug_Event_Log("Access Violation Detected", self.exception, self.exception_address)
                 elif self.exception == EXCEPTION_GUARD_PAGE:
                     self.Debug_Event_Log("Guard Page Access Detected", self.exception, self.exception_address)
-                   
+
             elif debug_event.dwDebugEventCode == OUTPUT_DEBUG_STRING_EVENT:
                 output_debug = debug_event.u.DebugString
                 msg = self.read_remote_string(output_debug.lpDebugStringData, output_debug.nDebugStringLength, output_debug.fUnicode)
@@ -266,13 +266,14 @@ class Debugger():
         #    self.Debug_Event_Log("Single Step Exception", self.exception, self.exception_address)
         self.show_registers()
         self.run_cmd_interpreter()
-    
+
     def exception_handler_breakpoint(self):
         if not self.breakpoints.has_key(self.exception_address):
-            if self.first_breakpoint == True:
+            # 第一次断点中断
+            if self.first_breakpoint:
                 self.first_breakpoint = False
                 print "[*] Hit the first breakpoint."
-                # Print the loaded modules
+                # 显示已被载入的模块
                 mods = self.enumerate_modules(self.pid)
                 for m in mods:
                     #print m.modBaseAddr
@@ -282,6 +283,7 @@ class Debugger():
                         print "[*] Loaded '%s' <0x%08x>" % (m.szExePath, base_addr)
                 # Set breakpoint
                 func_addr = self.resolve_function("msvcrt.dll", "printf")
+                print func_addr
                 #func_addr = self.resolve_func("kernel32.dll", "Sleep")
                 self.set_breakpoint(func_addr)
                 print "[*] Set breakpoint at: 0x%08x" % func_addr

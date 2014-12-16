@@ -1,4 +1,6 @@
-﻿from ctypes import *
+﻿# -*- coding: utf-8 -*-
+
+from ctypes import *
 from ctypes import wintypes
 
 # Map the Microsoft types to ctypes
