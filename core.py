@@ -70,21 +70,37 @@ class Debugger():
     #        descr = FormatError(code).strip() + descr
     #    return WindowsError(code, descr)
 
-    def resolve_function(self, dll, name):
-        handle = kernel32.GetModuleHandleA(dll)
-        if not handle:
-            raise WinError()
-        func = kernel32.GetProcAddress(handle, name)
-        kernel32.CloseHandle(handle)
+    def getAddress(self, symbol):
+        """获取指定符号的地址"""
+        t = symbol.split('.')
+        if len(t) == 1:
+            module = ""
+            name = t[0]
+        elif len(t) == 2:
+            module, name = t
+        else:
+            raise "symbol unpack failed"
+
+        if module == "":
+            hModule = kernel32.GetModuleHandle(0)
+        else:
+            # 载入模块
+            hModule = kernel32.LoadLibraryA(module)
+            if not hModule:
+                raise WinError()
+
+        # 获取符号地址
+        func = kernel32.GetProcAddress(hModule, name)
+        kernel32.CloseHandle(hModule)
         return func
 
     def set_breakpoint(self, address):
         if not self.breakpoints.has_key(address):
             try:
+            	# save the original byte
                 original_byte = self.read_process_memory(address, 1)
                 # write the opcode 0xCC (INT3)
                 self.write_process_memory(address, "\xCC")
-                # save the original byte
                 self.breakpoints[address] = original_byte
             except:
                 print "Failed to set breakpoint at 0x%08x" % address
@@ -96,7 +112,7 @@ class Debugger():
         # dwCreation flag determines how to create the process
         # set creation_flags = CREATE_NEW_CONSOLE if you want
         # to see the calculator GUI
-        creation_flags = DEBUG_PROCESS
+        CREATION_FLAGS = DEBUG_PROCESS
         # instantiate the structs
         startupinfo         = STARTUPINFO()
         process_information = PROCESS_INFORMATION()
@@ -113,7 +129,7 @@ class Debugger():
                                    None,
                                    None,
                                    None,
-                                   creation_flags,
+                                   CREATION_FLAGS,
                                    None,
                                    None,
                                    byref(startupinfo),
@@ -135,9 +151,9 @@ class Debugger():
         return hProcess
 
     def open_thread(self, thread_id):
-        h_thread = kernel32.OpenThread(THREAD_ALL_ACCESS, None, thread_id)
-        if h_thread is not None:
-            return h_thread
+        hThread = kernel32.OpenThread(THREAD_ALL_ACCESS, None, thread_id)
+        if hThread is not None:
+            return hThread
         else:
             print "[*] Could not obtain a valid thread handle."
             return False
@@ -187,7 +203,6 @@ class Debugger():
     def get_thread_context(self, h_thread):
         context = CONTEXT()
         context.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS
-
         if kernel32.GetThreadContext(h_thread, byref(context)):
             return context
         else:
@@ -206,43 +221,49 @@ class Debugger():
             #print "[*] Error occurred: 0x%08x." % kernel32.GetLastError()
             raise WinError()
 
-    def start_debug(self):
+    def run(self):
         """ Debugger main loop """
         while self.debugger_active:
-            self.get_debug_event()
+            self.poll_debug_event()
 
-    def get_debug_event(self):
-        debug_event = DEBUG_EVENT()
+    def poll_debug_event(self):
+        event = DEBUG_EVENT()
         continue_status = DBG_CONTINUE
 
         # 等待调试事件
-        if kernel32.WaitForDebugEvent(byref(debug_event), INFINITE):
-            self.h_thread = self.open_thread(debug_event.dwThreadId)
-            self.tid = debug_event.dwThreadId
+        if kernel32.WaitForDebugEvent(byref(event), INFINITE):
+            self.h_thread = self.open_thread(event.dwThreadId)
+            self.tid = event.dwThreadId
             self.context = self.get_thread_context(self.h_thread)
-            #print "Event Code: %d Thread ID: %d" % (debug_event.dwDebugEventCode, debug_event.dwThreadId)
+            #print "Event Code: %d Thread ID: %d" % (event.dwDebugEventCode, event.dwThreadId)
 
-            if debug_event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT:
-                self.exception = debug_event.u.Exception.ExceptionRecord.ExceptionCode
-                self.exception_address = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
-
+            if EXCEPTION_DEBUG_EVENT == event.dwDebugEventCode:
+                self.exception = event.u.Exception.ExceptionRecord.ExceptionCode
+                self.exception_address = event.u.Exception.ExceptionRecord.ExceptionAddress
                 if self.exception == EXCEPTION_SINGLE_STEP:
                     self.exception_handler_single_step()
                 elif self.exception == EXCEPTION_BREAKPOINT:
-                    self.Debug_Event_Log("Breakpoint Exception", self.exception, self.exception_address)
+                    self.Debug_Event_Log("Breakpoint Exception", self.exception, self.exception_address, event.u.Exception.dwFirstChance)
                     continue_status = self.exception_handler_breakpoint()
                 elif self.exception == EXCEPTION_ACCESS_VIOLATION:
                     self.Debug_Event_Log("Access Violation Detected", self.exception, self.exception_address)
+                    continue_status = DBG_EXCEPTION_NOT_HANDLED
                 elif self.exception == EXCEPTION_GUARD_PAGE:
                     self.Debug_Event_Log("Guard Page Access Detected", self.exception, self.exception_address)
 
-            elif debug_event.dwDebugEventCode == OUTPUT_DEBUG_STRING_EVENT:
-                output_debug = debug_event.u.DebugString
+            elif EXIT_PROCESS_DEBUG_EVENT == event.dwDebugEventCode:
+                iExitCode = event.u.ExitProcess.dwExitCode
+                print "[*] Debuggee process exited with code %d (0x%02x)" % (iExitCode, iExitCode)
+                self.detach()
+                self.debugger_active = False
+     
+            elif OUTPUT_DEBUG_STRING_EVENT == event.dwDebugEventCode:
+                output_debug = event.u.DebugString
                 msg = self.read_remote_string(output_debug.lpDebugStringData, output_debug.nDebugStringLength, output_debug.fUnicode)
-                print "Debug Output: %s" % msg
+                print "[*] Debug Output: %s" % msg
 
-            elif debug_event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT:
-                dllinfo = debug_event.u.LoadDll
+            elif LOAD_DLL_DEBUG_EVENT == event.dwDebugEventCode:
+                dllinfo = event.u.LoadDll
                 if dllinfo.hFile != None:
                     # 由于系统还未将dll完全载入目标进程，此时只记录dll基址
                     # 当第一个断点事件发生时，才能枚举调试进程中的模块，把这两个基址进行对比
@@ -250,10 +271,12 @@ class Debugger():
                     # 否则调用API时会产生无效句柄的错误
                     self.load_dlls.append(dllinfo.lpBaseOfDll)
                     kernel32.CloseHandle(dllinfo.hFile)
+
             else:
-                print "Unhandled Event Code: %d Thread ID: %d" % (debug_event.dwDebugEventCode, debug_event.dwThreadId)
-            # 继续执行目标进程
-            kernel32.ContinueDebugEvent(debug_event.dwProcessId, debug_event.dwThreadId, continue_status)
+                print "Unhandled Event Code: %d Thread ID: %d" % (event.dwDebugEventCode, event.dwThreadId)
+
+            # 继续运行目标进程
+            kernel32.ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status)
 
     def exception_handler_single_step(self):
         if self.breakpoint_single_step:
@@ -268,6 +291,7 @@ class Debugger():
         self.run_cmd_interpreter()
 
     def exception_handler_breakpoint(self):
+        """调试异常EXCEPTION_BREAKPOINT的处理函数"""
         if not self.breakpoints.has_key(self.exception_address):
             # 第一次断点中断
             if self.first_breakpoint:
@@ -282,11 +306,10 @@ class Debugger():
                     if base_addr in self.load_dlls:
                         print "[*] Loaded '%s' <0x%08x>" % (m.szExePath, base_addr)
                 # Set breakpoint
-                func_addr = self.resolve_function("msvcrt.dll", "printf")
-                print func_addr
+                bp_addr = self.getAddress("MSVCR100.printf")
                 #func_addr = self.resolve_func("kernel32.dll", "Sleep")
-                self.set_breakpoint(func_addr)
-                print "[*] Set breakpoint at: 0x%08x" % func_addr
+                self.set_breakpoint(bp_addr)
+                print "[*] Set breakpoint at: 0x%08x" % bp_addr
             else:
                 print "[*] Hit unknown breakpoint at 0x%08x" % self.exception_address
             continue_status = DBG_CONTINUE
@@ -307,7 +330,7 @@ class Debugger():
 
     def detach(self):
         if kernel32.DebugActiveProcessStop(self.pid):
-            print "[*] Finished debugging. Exiting..."
+            print "[*] Finished debugging."
             return True
         else:
             print "There was an error"
@@ -325,9 +348,12 @@ class Debugger():
         # reset interpreter states
         self.cmd_go = False
         while True:
-            cmd = raw_input("*> ")
-            if cmd == "":
+            input = raw_input("*> ").strip()
+            if len(input) <= 0:
                 continue
+            parsedInput = input.split(" ")
+            cmd = parsedInput[0]
+            
             if cmd == ":?" or cmd == ":h" or cmd == ":help":
                 print "g: go\nt: single stepping\nr: display registers\nsb: show all breakpoints\n~: the number of threads\n"
             elif cmd == "g" or cmd == "go":
@@ -339,11 +365,15 @@ class Debugger():
                 self.context.EFlags |= 0x00000100  # set TF bit
                 kernel32.SetThreadContext(self.h_thread,byref(self.context))
                 break
+            elif cmd == 'bp':
+                if len(parsedInput) > 1:
+                    address = parsedInput[1]
+                    self.set_breakpoint(eval(address))
             elif cmd == 'r':
                 self.show_registers()
             elif cmd == 'sb':
-                for i, addr in enumerate(self.breakpoints.iterkeys()):
-                    print "Num\tAddress"
+                print "Num\tAddress"
+                for i, addr in enumerate(self.breakpoints.iterkeys()):    
                     print "%d\t0x%08x" % (i, addr)
             elif cmd == '~':
                 tlist = self.enumerate_threads()

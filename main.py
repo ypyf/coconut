@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import core
 import argparse
@@ -33,6 +33,6 @@ if args.p != None:
     debugger.detach()
 else:
     debugger.load(args.path_to_exe)
-    debugger.start_debug()
+    debugger.run()
 
 

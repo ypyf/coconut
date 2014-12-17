@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from ctypes import *
 from ctypes import wintypes
@@ -24,7 +24,9 @@ DEBUG_PROCESS         = 0x00000001
 CREATE_NEW_CONSOLE    = 0x00000010
 PROCESS_ALL_ACCESS    = 0x001F0FFF
 INFINITE              = 0xFFFFFFFF
-DBG_CONTINUE          = 0x00010002
+
+DBG_EXCEPTION_NOT_HANDLED = 0x80010001
+DBG_CONTINUE              = 0x00010002
 
 MAX_PATH = 260
 MAX_MODULE_NAME32 = 255
@@ -164,6 +166,12 @@ class OUTPUT_DEBUG_STRING_INFO(Structure):
         ("nDebugStringLength", WORD),
         ]
 
+#
+class EXIT_PROCESS_DEBUG_INFO(Structure):
+    _fields_ = [
+        ("dwExitCode", DWORD)
+        ]
+
 class LOAD_DLL_DEBUG_INFO(Structure):
     _fields_ = [
         ("hFile", HANDLE),
@@ -181,7 +189,7 @@ class DEBUG_EVENT_UNION(Union):
 #        ("CreateThread",      CREATE_THREAD_DEBUG_INFO),
 #        ("CreateProcessInfo", CREATE_PROCESS_DEBUG_INFO),
 #        ("ExitThread",        EXIT_THREAD_DEBUG_INFO),
-#        ("ExitProcess",       EXIT_PROCESS_DEBUG_INFO),
+        ("ExitProcess",       EXIT_PROCESS_DEBUG_INFO),
         ("LoadDll",           LOAD_DLL_DEBUG_INFO),
 #        ("UnloadDll",         UNLOAD_DLL_DEBUG_INFO),
         ("DebugString",       OUTPUT_DEBUG_STRING_INFO),
