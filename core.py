@@ -215,7 +215,7 @@ class Debugger():
         if kernel32.DebugActiveProcess(pid):
             self.debugger_active = True
             self.pid = int(pid)
-            self.start_debug()
+            self.run()
         else:
             print "[*] Unable to attach to the process."
             #print "[*] Error occurred: 0x%08x." % kernel32.GetLastError()
