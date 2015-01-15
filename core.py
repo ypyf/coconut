@@ -84,7 +84,7 @@ class Debugger():
         if module == "":
             hModule = kernel32.GetModuleHandle(0)
         else:
-            # 载入模块
+            # 只有先载入模块才能获取所需过程的地址
             hModule = kernel32.LoadLibraryA(module)
             if not hModule:
                 raise WinError()
